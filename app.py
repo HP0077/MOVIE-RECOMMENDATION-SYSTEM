@@ -3,10 +3,14 @@ from flask_cors import CORS
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+try:
+    from thefuzz import process  # Use thefuzz (newer version of fuzzywuzzy)
+except ImportError:
+    from fuzzywuzzy import process  # Fallback to fuzzywuzzy if thefuzz isn't available
 import os
 
 app = Flask(__name__, template_folder="templates")
-CORS(app)  # ✅ Fixes frontend-backend communication issues
+CORS(app)
 
 # Load the dataset
 movies_file_path = os.path.join(os.path.dirname(__file__), 'movies.csv')
@@ -31,28 +35,39 @@ vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
 feature_vectors = vectorizer.fit_transform(movies_data['combined_features'])
 similarity = cosine_similarity(feature_vectors)
 
-# Function to get recommendations
+# Function to get recommendations using fuzzy matching & TF-IDF
 def recommend_movie(movie_name):
     movie_name = movie_name.lower().strip()
 
-    print("🔍 Searching for:", movie_name)  # Debugging
+    print("🔍 Searching for:", movie_name)
 
-    # Convert movie titles to lowercase for comparison
-    movies_data['title_lower'] = movies_data['title'].str.lower()
+    # Use Fuzzy Matching to find the best matching movie title
+    match = process.extractOne(movie_name, movies_data['title_lower'])
 
-    matching_movies = movies_data[movies_data['title_lower'].str.contains(movie_name, regex=False, na=False)]
-
-    if matching_movies.empty:
-        print("❌ Movie not found in dataset!")
+    if match:  # Ensure we got a valid match
+        best_match = match[0]  # Movie title
+        score = match[1]       # Matching score
+    else:
+        print("❌ No strong match found!")
         return []
 
-    movie_index = matching_movies.index[0]  # Get the first matching movie
-    scores = sorted(list(enumerate(similarity[movie_index])), key=lambda x: x[1], reverse=True)[1:6]
+    if score < 60:  # If the match is weak, return an empty list
+        print("❌ No strong match found!")
+        return []
+
+    print(f"✅ Best match found: {best_match} (Score: {score})")
+
+    # Find the index of the best-matched movie
+    movie_index = movies_data[movies_data['title_lower'] == best_match].index[0]
+
+    # Find top 25 most similar movies based on descriptions
+    scores = sorted(list(enumerate(similarity[movie_index])), key=lambda x: x[1], reverse=True)[1:25]
 
     recommended_movies = [movies_data.iloc[i[0]]['title'] for i in scores]
 
-    print("🎥 Recommendations:", recommended_movies)  # Debugging
+    print("🎥 Recommendations:", recommended_movies)
     return recommended_movies
+
 # Homepage route
 @app.route('/')
 def home():
@@ -69,6 +84,7 @@ def recommend():
             return jsonify({"error": "No movie name provided!"}), 400
 
         recommendations = recommend_movie(movie_name)
+
         return jsonify({"recommendations": recommendations})
 
     except Exception as e:
